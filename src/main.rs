@@ -27,17 +27,14 @@ fn main() {
 }
 
 fn handle_connection(stream: TcpStream) {
-    let contents = match parse_connection_to_header(&stream) {
+    let filepath = match parse_connection_to_header(&stream) {
         Ok(request) => {
             println!("Request: {request}");
-            match parse_header_to_filepath(request) {
-                Ok(filepath) => read_file(filepath),
-                Err(err) => Err(err),
-            }
+            parse_header_to_filepath(request)
         }
         Err(err) => Err(err),
     };
-    respond(&stream, contents);
+    respond(&stream, filepath);
 }
 
 fn parse_connection_to_header(stream: &TcpStream) -> Result<String, HTTP_RESPONSE_CODE> {
@@ -52,7 +49,7 @@ fn parse_connection_to_header(stream: &TcpStream) -> Result<String, HTTP_RESPONS
 }
 
 fn parse_header_to_filepath(request: String) -> Result<String, HTTP_RESPONSE_CODE> {
-    let regex = Regex::new(r"GET /(?<path>[^/].*|) HTTP/(1\.1|2)").unwrap();
+    let regex = Regex::new(r"^GET /(?<path>[^/].*|) HTTP/(1\.1|2)").unwrap();
     match regex.captures(&request) {
         Some(captures) => Ok(captures["path"].to_string()),
         None => Err(HTTP_400_BAD_REQUEST),
@@ -70,21 +67,60 @@ fn read_file(filename: String) -> Result<String, HTTP_RESPONSE_CODE> {
     }
 }
 
-fn respond(mut stream: &TcpStream, contents: Result<String, HTTP_RESPONSE_CODE>) {
-    let (status, length, contents) = match contents {
-        Ok(contents) =>
-            ( format!("HTTP/1.1 {HTTP_200_OK}")
-            , contents.len()
-            , contents
-            ),
+fn get_file_extension(filename: String) -> Option<String> {
+    let regex = Regex::new(r"^.*\.(?<extension>[a-z]+)$").unwrap();
+    match regex.captures(&filename) {
+        Some(captures) => Some(captures["extension"].to_string()),
+        None => None,
+    }
+}
+
+fn get_content_type(filename: String) -> Option<String> {
+    let header = "Content-Type:";
+    match &get_file_extension(filename) {
+        Some(val) if val == "js" => Some(format!("{header} text/javascript")),
+        Some(val) if val == "html" => Some(format!("{header} text/html")),
+        Some(val) if val == "css" => Some(format!("{header} text/css")),
+        Some(val) if val == "png" => Some(format!("{header} image/png")),
+        Some(val) if val == "jpg" => Some(format!("{header} image/jpeg")),
+        Some(val) if val == "jpeg" => Some(format!("{header} image/jpeg")),
+        _ => None,
+    }
+}
+
+fn respond(mut stream: &TcpStream, filename: Result<String, HTTP_RESPONSE_CODE>) {
+    let (status, headers, contents) = match filename {
+        Ok(filename) => {
+            let filename = match filename {
+                val if val == "".to_string() => "index.html".to_string(),
+                filename => filename,
+            };
+            let contents = read_file(filename.clone());
+            let content_type = match get_content_type(filename) {
+                Some(header) => format!("{header}\r\n"),
+                None => "".to_string(),
+            };
+            match contents {
+                Ok(contents) =>
+                    ( format!("HTTP/1.1 {HTTP_200_OK}")
+                    , format!("Content-Length: {}\r\n{content_type}\r\n", contents.len())
+                    , contents
+                    ),
+                Err(err) =>
+                    ( format!("HTTP/1.1 {err}")
+                    , format!("Content-Length: {}\r\nContent-Type: text/html\r\n", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>404 NOT FOUND</title></head><body>Page not found. Check that you typed the address correctly, or contact the site owner.</body></html>".len())
+                    , "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>404 NOT FOUND</title></head><body>Page not found. Check that you typed the address correctly, or contact the site owner.</body></html>".to_string()
+                    ),
+            }
+        },
         Err(err) =>
             ( format!("HTTP/1.1 {err}")
-            , "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>404 NOT FOUND</title></head><body>Page not found. Check that you typed the address correctly, or contact the site owner.</body></html>".len()
+            , format!("Content-Length: {}\r\nContent-Type: text/html\r\n", "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>404 NOT FOUND</title></head><body>Page not found. Check that you typed the address correctly, or contact the site owner.</body></html>".len())
             , "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>404 NOT FOUND</title></head><body>Page not found. Check that you typed the address correctly, or contact the site owner.</body></html>".to_string()
             ),
-        };
-    println!("Response: {status}\r\nContent-Length: {length}\r\n\r\n{contents}");
+    };
+    println!("Response: {status}\r\n{headers}\r\n{contents}");
     stream
-        .write_all(format!("{status}\r\nContent-Length: {length}\r\n\r\n{contents}").as_bytes())
+        .write_all(format!("{status}\r\n{headers}\r\n{contents}").as_bytes())
         .expect("Error writing to stream");
 }
