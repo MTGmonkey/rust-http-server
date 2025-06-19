@@ -52,7 +52,7 @@ fn parse_connection_to_header(stream: &TcpStream) -> Result<String, HTTP_RESPONS
 }
 
 fn parse_header_to_filepath(request: String) -> Result<String, HTTP_RESPONSE_CODE> {
-    let regex = Regex::new(r"GET /(?<path>[^/].*|) HTTP/1\.1").unwrap();
+    let regex = Regex::new(r"GET /(?<path>[^/].*|) HTTP/(1\.1|2)").unwrap();
     match regex.captures(&request) {
         Some(captures) => Ok(captures["path"].to_string()),
         None => Err(HTTP_400_BAD_REQUEST),
